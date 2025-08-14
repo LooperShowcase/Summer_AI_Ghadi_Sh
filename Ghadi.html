@@ -1,0 +1,196 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Teachable Machine App</title>
+    <!-- Tailwind CSS for modern styling -->
+    <script src="https://cdn.tailwindcss.com"></script>
+    <style>
+        /* Custom styles to ensure the video and container fit well */
+        body {
+            font-family: 'Inter', sans-serif;
+            background-color: #f3f4f6;
+            display: flex;
+            justify-content: center;
+            align-items: center;
+            min-height: 100vh;
+        }
+        .container {
+            max-width: 900px;
+            width: 100%;
+            padding: 2rem;
+            box-shadow: 0 10px 15px -3px rgba(0, 0, 0, 0.1), 0 4px 6px -2px rgba(0, 0, 0, 0.05);
+        }
+        #webcam-container, #label-container {
+            display: flex;
+            flex-direction: column;
+            align-items: center;
+        }
+        video {
+            width: 100%;
+            max-width: 640px;
+            border-radius: 1rem;
+            box-shadow: 0 4px 6px -1px rgba(0, 0, 0, 0.1), 0 2px 4px -1px rgba(0, 0, 0, 0.06);
+        }
+    </style>
+</head>
+<body class="bg-gray-100 text-gray-800">
+
+    <!-- Main Container -->
+    <div class="container bg-white rounded-2xl p-6 md:p-10 text-center space-y-6">
+
+        <!-- Title and Description -->
+        <h1 class="text-3xl md:text-4xl font-extrabold text-blue-600">Teachable Machine Model</h1>
+        <p class="text-lg text-gray-600">
+            This app uses your webcam to detect objects based on your Teachable Machine model.
+        </p>
+
+        <!-- Webcam and Predictions Container -->
+        <div class="space-y-6">
+            <!-- Webcam container where the video feed will be displayed -->
+            <div id="webcam-container" class="relative">
+                <video id="webcam" class="rounded-xl w-full" autoplay playsinline></video>
+                <!-- Loading state indicator -->
+                <div id="loading" class="absolute inset-0 flex items-center justify-center bg-gray-900 bg-opacity-70 text-white text-lg rounded-xl hidden">
+                    Loading model... please wait.
+                </div>
+            </div>
+
+            <!-- Prediction results container -->
+            <div id="label-container" class="space-y-4">
+                <p class="text-lg font-semibold text-gray-700">Prediction:</p>
+                <div id="prediction-output" class="text-2xl font-bold text-gray-800">
+                    <span class="text-gray-500">Press 'Start' to begin.</span>
+                </div>
+            </div>
+        </div>
+
+        <!-- Control Buttons -->
+        <div class="flex justify-center space-x-4">
+            <button id="start-button" class="bg-blue-600 text-white font-bold py-3 px-6 rounded-full shadow-lg hover:bg-blue-700 transition duration-300 transform hover:scale-105">
+                Start
+            </button>
+            <button id="stop-button" class="bg-red-500 text-white font-bold py-3 px-6 rounded-full shadow-lg hover:bg-red-600 transition duration-300 transform hover:scale-105 hidden">
+                Stop
+            </button>
+        </div>
+
+    </div>
+
+    <!-- TensorFlow.js and Teachable Machine Libraries -->
+    <script src="https://cdn.jsdelivr.net/npm/@tensorflow/tfjs@1.3.1/dist/tf.min.js"></script>
+    <script src="https://cdn.jsdelivr.net/npm/@teachablemachine/image@0.8/dist/teachablemachine-image.min.js"></script>
+
+    <script type="text/javascript">
+        // The URL for your Teachable Machine model.
+        // This is the URL from your prompt: https://teachablemachine.withgoogle.com/models/C4Z7xXv-T/
+        const URL = "https://teachablemachine.withgoogle.com/models/C4Z7xXv-T/";
+
+        let model, webcam, labelContainer, maxPredictions;
+        let isRunning = false;
+        let animationFrameId = null;
+
+        // Get DOM elements
+        const startButton = document.getElementById('start-button');
+        const stopButton = document.getElementById('stop-button');
+        const webcamElement = document.getElementById('webcam');
+        const loadingElement = document.getElementById('loading');
+        const predictionOutput = document.getElementById('prediction-output');
+        labelContainer = document.getElementById('label-container');
+
+        // This function initializes the webcam and loads the model.
+        async function init() {
+            if (isRunning) return;
+
+            // Show loading message
+            loadingElement.classList.remove('hidden');
+            startButton.disabled = true;
+
+            const modelURL = URL + "model.json";
+            const metadataURL = URL + "metadata.json";
+
+            // Load the model and metadata
+            try {
+                model = await tmImage.load(modelURL, metadataURL);
+                maxPredictions = model.getTotalClasses();
+            } catch (error) {
+                console.error("Error loading the model:", error);
+                predictionOutput.innerHTML = `<span class="text-red-500">Failed to load model. Check the console for details.</span>`;
+                loadingElement.classList.add('hidden');
+                startButton.disabled = false;
+                return;
+            }
+
+            // Set up the webcam
+            try {
+                const flip = true; // whether to flip the webcam
+                webcam = new tmImage.Webcam(200, 200, flip); // width, height, flip
+                await webcam.setup(); // request access to the webcam
+                webcam.play();
+                webcamElement.srcObject = webcam.webcam.srcObject;
+                isRunning = true;
+                startButton.classList.add('hidden');
+                stopButton.classList.remove('hidden');
+                loadingElement.classList.add('hidden');
+                
+                // Start the prediction loop
+                window.requestAnimationFrame(loop);
+            } catch (error) {
+                console.error("Error setting up the webcam:", error);
+                predictionOutput.innerHTML = `<span class="text-red-500">Failed to access webcam. Please allow access and try again.</span>`;
+                loadingElement.classList.add('hidden');
+                startButton.disabled = false;
+                return;
+            }
+        }
+
+        // The main prediction loop
+        async function loop() {
+            if (!isRunning) return;
+            webcam.update(); // Update the webcam frame
+            await predict();
+            animationFrameId = window.requestAnimationFrame(loop);
+        }
+
+        // This function runs the prediction on the current webcam frame.
+        async function predict() {
+            // Predict the image and get the results
+            const prediction = await model.predict(webcam.canvas);
+            
+            // Find the class with the highest probability
+            let highestProb = 0;
+            let highestClass = '';
+            for (let i = 0; i < maxPredictions; i++) {
+                const classPrediction = prediction[i].className + ": " + prediction[i].probability.toFixed(2);
+                if (prediction[i].probability > highestProb) {
+                    highestProb = prediction[i].probability;
+                    highestClass = prediction[i].className;
+                }
+            }
+            
+            // Display the result
+            predictionOutput.innerHTML = `<span class="text-blue-600">${highestClass}</span>: <span class="text-gray-900 font-normal">${(highestProb * 100).toFixed(0)}%</span>`;
+        }
+
+        // This function stops the webcam and the prediction loop.
+        function stop() {
+            if (isRunning) {
+                isRunning = false;
+                if (animationFrameId) {
+                    window.cancelAnimationFrame(animationFrameId);
+                }
+                webcam.stop();
+                webcamElement.srcObject = null;
+                startButton.classList.remove('hidden');
+                stopButton.classList.add('hidden');
+                predictionOutput.innerHTML = `<span class="text-gray-500">Stopped. Press 'Start' to begin again.</span>`;
+            }
+        }
+
+        // Add event listeners for the buttons
+        startButton.addEventListener('click', init);
+        stopButton.addEventListener('click', stop);
+    </script>
+</body>
+</html>
